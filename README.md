@@ -16,7 +16,7 @@ Then you can run the code below to start crawling all PDFs from every NeurIPS co
 python src/neurips_crawler.py --from_year=1998 --to_year=2018 --output=./neurips_output/ --log=./crawler_log.txt
 ```
 
-The script will create a folder inside `--output` where all papers will be stored together with a `jsons` file with all metadata the script is able to collect from website. If a folder for a given year is available, it will be assumed that the year was already processed and skip to the next one. Note that log will both available in the console and in a log file.
+The script will create a folder inside `--output` where all papers will be stored together with a `jsons` file with all metadata the script is able to collect from website. If a folder for a given year is available, it will be assumed that the year was already processed and skip to the next one. Logs will be available in both the console and a log file.
 
 Any entry on the `jsons` file will look like this:
 

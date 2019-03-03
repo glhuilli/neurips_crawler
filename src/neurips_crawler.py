@@ -140,14 +140,14 @@ def get_abstract(paper: NeuripsPaper, paper_soup: BeautifulSoup) -> None:
 def get_authors(paper: NeuripsPaper, paper_soup: BeautifulSoup) -> None:
     """
     Finds all authors in the BeautifulSoup object.
+
+    The author_id is a permalink used for a given author across all conferences.
     """
-    paper_authors = [(re.findall(r'-(\d+)$', author.contents[0]['href'])[0],
-                      author.contents[0].contents[0])
-                     for author in paper_soup.find_all('li', attrs={'class': 'author'})]
     paper.authors = []
-    for author in paper_authors:
-        id_ = str(uuid.uuid5(_NEURIPS_NAMESPACE, author[0].lower()))
-        paper.authors.append({'id': id_, 'name': author[1]})
+    for author in paper_soup.find_all('li', attrs={'class': 'author'}):
+        author_id = author.contents[0]['href'].split('/author/')[-1]
+        author_name = author.contents[0].contents[0]
+        paper.authors.append({'id': author_id, 'name': author_name})
 
 
 def save_paper(paper: NeuripsPaper, output_folder: str, output: TextIO,
