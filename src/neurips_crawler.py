@@ -1,48 +1,86 @@
 import argparse
 import json
+import logging
 import os
 import re
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, TextIO
+from typing import Dict, Iterable, List, NamedTuple, Optional, TextIO
 
 import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 _BASE_URL = 'http://papers.nips.cc'
-_CRAWLING_WAIT_TIME = 10
+_CRAWLING_WAIT_TIME = 0.3
 _NEURIPS_NAMESPACE = uuid.UUID('5ee6531f-0d79-4cf1-8da6-dc83cb553336')
 _FIRST_YEAR = 1988
 _PDF_FOLDER = 'pdfs'
+_OUTPUT_PAPERS_FILE = 'papers_data.jsons'
 
 
 class NeuripsUrl(NamedTuple):
+    """
+    Immutable object that stores a NeurIPS conference url and year
+    """
     url: str
     year: str
 
 
+class NeuripsPaperData(NamedTuple):
+    """
+    Immutable object that stores a NeurIPS paper data
+    """
+    id_: str
+    title: str
+    pdf_name: str
+    pdf_link: str
+    info_link: str
+
+
 class NeuripsPaper:
-    def __init__(self, id_, title, pdf_name, pdf_link, info_link):
-        self.id_: str = id_
-        self.title: str = title
-        self.pdf_name: str = pdf_name
-        self.pdf_link: str = pdf_link
-        self.info_link: str = info_link
+    """
+    Mutable object that stores all relevant properties from a paper
+    """
+
+    def __init__(self, data: NeuripsPaperData):
+        self.data = data
         self.abstract: Optional[str] = None
         self.authors: Optional[List[Dict[str, str]]] = None
 
+    def to_json(self):
+        """
+        Excludes pdf_link and info_link as it's not needed for further data analysis.
+        """
+        return {
+            'id_': self.data.id_,
+            'title': self.data.title,
+            'pdf_name': self.data.pdf_name,
+            'abstract': self.abstract,
+            'authors': self.authors
+        }
 
-def crawl_papers(neurips_url: NeuripsUrl) -> Iterable[NeuripsPaper]:
+
+def crawl_papers(neurips_url: NeuripsUrl, logger: logging.Logger) -> Iterable[NeuripsPaper]:
+    """
+    Iterate over each paper found in conference url.
+    """
     for link in get_paper_links(neurips_url.url):
+        time.sleep(_CRAWLING_WAIT_TIME)
         paper = init_neurips_paper(link)
-        paper_soup = BeautifulSoup(requests.get(paper.info_link).content, 'lxml')
-        get_abstract(paper, paper_soup)
-        get_authors(paper, paper_soup)
-        yield paper
+        try:
+            paper_soup = BeautifulSoup(requests.get(paper.data.info_link).content, 'lxml')
+            get_abstract(paper, paper_soup)
+            get_authors(paper, paper_soup)
+            yield paper
+        except requests.exceptions.ConnectionError:
+            logger.info('Exception when crawling paper: %s', paper.to_json(), exc_info=True)
 
 
 def get_conference_links(year_from: int, year_to: int) -> Iterable[NeuripsUrl]:
+    """
+    Return the link to crawl for each NeurIPS conference between input years.
+    """
     base = _BASE_URL + '/book/advances-in-neural-information-processing-systems-{}-{}'
     number_year_from = year_from - _FIRST_YEAR + 1
     number_year_to = year_to - _FIRST_YEAR + 1
@@ -53,33 +91,56 @@ def get_conference_links(year_from: int, year_to: int) -> Iterable[NeuripsUrl]:
 
 
 def save_pdf_file(pdf_link: str, pdf_name: str, year_output_folder: str) -> None:
+    """
+    Downloads the paper and saves it to the pdf folder.
+    """
     pdf = requests.get(pdf_link)
     with open(os.path.join(year_output_folder, _PDF_FOLDER, pdf_name), 'wb') as pdf_file:
         pdf_file.write(pdf.content)
 
 
-def get_paper_links(url: str) -> Iterable[Any]:
+def get_paper_links(url: str) -> Iterable[BeautifulSoup]:
+    """
+    Locates all paper links in the url and returns a BeautifulSoup object
+    """
     url_request = requests.get(url)
     for link in BeautifulSoup(url_request.content, 'lxml').find_all('a'):
         if link['href'][:7] == '/paper/':
             yield link
 
 
-def init_neurips_paper(link: Any) -> NeuripsPaper:
+def init_neurips_paper(link: BeautifulSoup) -> NeuripsPaper:
+    """
+    Given the BeautifulSoup object, initializes a NeuripsPaper
+    """
     paper_title = link.contents[0]
     info_link = _BASE_URL + link['href']
     pdf_link = info_link + '.pdf'
     pdf_name = link['href'][7:] + '.pdf'
     paper_id = str(uuid.uuid5(_NEURIPS_NAMESPACE, re.findall(r'^(\d+)-', pdf_name)[0]))
     return NeuripsPaper(
-        id_=paper_id, title=paper_title, info_link=info_link, pdf_link=pdf_link, pdf_name=pdf_name)
+        data=NeuripsPaperData(
+            id_=paper_id,
+            title=paper_title,
+            info_link=info_link,
+            pdf_link=pdf_link,
+            pdf_name=pdf_name))
 
 
-def get_abstract(paper: NeuripsPaper, paper_soup: Any) -> None:
+def get_abstract(paper: NeuripsPaper, paper_soup: BeautifulSoup) -> None:
+    """
+    Searches for a paragraph of class 'abstract' and adds it to the paper object
+
+    Note that the abstract might not be always available in the web page
+    (sometimes it's just a "Abstract Missing" message)
+    """
     paper.abstract = paper_soup.find('p', attrs={'class': 'abstract'}).contents[0]
 
 
-def get_authors(paper: NeuripsPaper, paper_soup: Any) -> None:
+def get_authors(paper: NeuripsPaper, paper_soup: BeautifulSoup) -> None:
+    """
+    Finds all authors in the BeautifulSoup object.
+    """
     paper_authors = [(re.findall(r'-(\d+)$', author.contents[0]['href'])[0],
                       author.contents[0].contents[0])
                      for author in paper_soup.find_all('li', attrs={'class': 'author'})]
@@ -89,33 +150,74 @@ def get_authors(paper: NeuripsPaper, paper_soup: Any) -> None:
         paper.authors.append({'id': id_, 'name': author[1]})
 
 
-def save_paper(paper: NeuripsPaper, output_folder: str, output: TextIO) -> None:
-    save_pdf_file(paper.pdf_link, paper.pdf_name, output_folder)
-    output.write(json.dumps(paper.__dict__) + '\n')
+def save_paper(paper: NeuripsPaper, output_folder: str, output: TextIO,
+               logger: logging.Logger) -> None:
+    """
+    Saves PDF and writes the NeuripsPaper json into the output TextIO
+    """
+    save_pdf_file(paper.data.pdf_link, paper.data.pdf_name, output_folder)
+    try:
+        output.write(json.dumps(paper.to_json()) + '\n')
+    except TypeError:
+        logger.info('Exception saving paper: %s', paper.__dict__, exc_info=True)
+
+
+def get_logger(log_file: str) -> logging.Logger:
+    """
+    This logger prints both in screen and into a log file at the same time
+    """
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
 
 
 def parse_args():
+    """
+    argparse initializer. Note that only output and log have default values.
+    """
     parser = argparse.ArgumentParser(description='Crawl NeurIPS Papers.')
     parser.add_argument('--from_year', help='Starting year to crawl')
     parser.add_argument('--to_year', help='Final year to crawl')
     parser.add_argument('--output', default='./output/', help='Output classifier path')
+    parser.add_argument('--log', default='./crawler_log.txt', help='Log file')
     return parser.parse_args()
 
 
 def main(args):
+    """
+    Iterates over conferences from input years and then papers within these conferences.
+    Saves both pdf from papers found and a Json representation of a paper's information.
+
+    Exceptions will be logged into a log file and displayed in the console.
+    """
+    logger = get_logger(args.log)
+    logger.info('crawling NeurIPS')
     for neurips_url in tqdm(
             get_conference_links(int(args.from_year), int(args.to_year)),
             'iterating over conferences'):
+        logger.info(f'NeurIPS-{neurips_url.year} crawling started.')
         year_output_folder = os.path.join(args.output, f'data_{neurips_url.year}')
         if os.path.isdir(year_output_folder):
+            logger.info(f'Year {neurips_url.year} was already processed.')
             continue
         os.makedirs(f'{year_output_folder}/{_PDF_FOLDER}')
-        with open(os.path.join(year_output_folder, 'papers_data.jsons'), 'w') as output:
-            for paper in tqdm(crawl_papers(neurips_url), 'iterating over papers'):
-                try:
-                    save_paper(paper, year_output_folder, output)
-                except TypeError:
-                    continue
+        with open(os.path.join(year_output_folder, _OUTPUT_PAPERS_FILE), 'w') as output:
+            for paper in tqdm(crawl_papers(neurips_url, logger), 'iterating over papers'):
+                save_paper(paper, year_output_folder, output, logger)
+        logger.info(f'NeurIPS-{neurips_url.year} crawled successfully.')
         time.sleep(_CRAWLING_WAIT_TIME)
 
 

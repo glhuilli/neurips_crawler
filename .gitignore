@@ -3,3 +3,4 @@
 output
 .mypy_cache
 .idea
+crawler_log.txt
