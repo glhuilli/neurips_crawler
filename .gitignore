@@ -1,0 +1,5 @@
+.DS_Store
+.python
+output
+.mypy_cache
+.idea
