@@ -53,7 +53,7 @@ class NeuripsPaper:
         Excludes pdf_link and info_link as it's not needed for further data analysis.
         """
         return {
-            'id_': self.data.id_,
+            'id': self.data.id_,
             'title': self.data.title,
             'pdf_name': self.data.pdf_name,
             'abstract': self.abstract,
@@ -191,7 +191,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Crawl NeurIPS Papers.')
     parser.add_argument('--from_year', help='Starting year to crawl')
     parser.add_argument('--to_year', help='Final year to crawl')
-    parser.add_argument('--output', default='./output/', help='Output classifier path')
+    parser.add_argument('--output', default='./output/', help='Output path')
     parser.add_argument('--log', default='./crawler_log.txt', help='Log file')
     return parser.parse_args()
 
@@ -200,6 +200,7 @@ def main(args):
     """
     Iterates over conferences from input years and then papers within these conferences.
     Saves both pdf from papers found and a Json representation of a paper's information.
+    If year folder is available, then it will skip that year from crawling.
 
     Exceptions will be logged into a log file and displayed in the console.
     """
