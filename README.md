@@ -35,6 +35,9 @@ Any entry on the `jsons` file will look like this:
 }
 ```
 
+If you want to retry a given year (e.g. some papers failed to download), you can use the `--force` option. 
+
+
 
 The script was formatted using `mypy`, `yapf`, `isort`, and `pylint`.
 
