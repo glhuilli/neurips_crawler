@@ -5,7 +5,10 @@ import os
 import re
 import time
 import uuid
-from typing import Dict, Iterable, List, NamedTuple, Optional, TextIO
+from typing import Dict, Iterable, List, NamedTuple, Optional, Set, TextIO
+
+from socket import error as socket_error
+import errno
 
 import requests
 from bs4 import BeautifulSoup
@@ -61,12 +64,16 @@ class NeuripsPaper:
         }
 
 
-def crawl_papers(neurips_url: NeuripsUrl, logger: logging.Logger) -> Iterable[NeuripsPaper]:
+def crawl_papers(neurips_url: NeuripsUrl, logger: logging.Logger, downloaded_files: Set[str]) -> Iterable[NeuripsPaper]:
     """
     Iterate over each paper found in conference url.
     """
     for link in get_paper_links(neurips_url.url):
         time.sleep(_CRAWLING_WAIT_TIME)
+        pdf_name = link['href'].split('/')[-1] + '.pdf'
+        if pdf_name in downloaded_files:
+            logger.info(f'skipping {pdf_name}')
+            continue
         paper = init_neurips_paper(link)
         try:
             paper_soup = BeautifulSoup(requests.get(paper.data.info_link).content, 'lxml')
@@ -75,6 +82,10 @@ def crawl_papers(neurips_url: NeuripsUrl, logger: logging.Logger) -> Iterable[Ne
             yield paper
         except requests.exceptions.ConnectionError:
             logger.info('Exception when crawling paper: %s', paper.to_json(), exc_info=True)
+        except socket_error as e:
+            if e.errno != errno.ECONNRESET:
+                raise
+            pass
 
 
 def get_conference_links(year_from: int, year_to: int) -> Iterable[NeuripsUrl]:
@@ -193,6 +204,7 @@ def parse_args():
     parser.add_argument('--to_year', help='Final year to crawl')
     parser.add_argument('--output', default='./output/', help='Output path')
     parser.add_argument('--log', default='./crawler_log.txt', help='Log file')
+    parser.add_argument('--force', action='store_true', default=False, help='force run already downloaded years')
     return parser.parse_args()
 
 
@@ -211,12 +223,27 @@ def main(args):
             'iterating over conferences'):
         logger.info(f'NeurIPS-{neurips_url.year} crawling started.')
         year_output_folder = os.path.join(args.output, f'data_{neurips_url.year}')
-        if os.path.isdir(year_output_folder):
+        files = set()
+        papers_meta_data = {}
+        if args.force:
+            #  load data from year metadata if available to skip files already downloaded
+            if os.path.isdir(year_output_folder):
+                with open(os.path.join(year_output_folder, _OUTPUT_PAPERS_FILE), 'r') as mdf:
+                    for line in mdf.readlines():
+                        meta_data = json.loads(line)
+                        papers_meta_data[meta_data['pdf_name']] = meta_data
+                        files.add(meta_data['pdf_name'])
+        logger.info(f'already processed: {len(files)}')
+
+        if os.path.isdir(year_output_folder) and not args.force:
             logger.info(f'Year {neurips_url.year} was already processed.')
             continue
-        os.makedirs(f'{year_output_folder}/{_PDF_FOLDER}')
-        with open(os.path.join(year_output_folder, _OUTPUT_PAPERS_FILE), 'w') as output:
-            for paper in tqdm(crawl_papers(neurips_url, logger), 'iterating over papers'):
+
+        if not os.path.isdir(year_output_folder):  # create folder if year_output_folder doesn't exist
+            os.makedirs(f'{year_output_folder}/{_PDF_FOLDER}')
+
+        with open(os.path.join(year_output_folder, _OUTPUT_PAPERS_FILE), 'a') as output:
+            for paper in tqdm(crawl_papers(neurips_url, logger, downloaded_files=files), 'iterating over papers'):
                 save_paper(paper, year_output_folder, output, logger)
         logger.info(f'NeurIPS-{neurips_url.year} crawled successfully.')
         time.sleep(_CRAWLING_WAIT_TIME)
